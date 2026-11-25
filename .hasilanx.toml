@@ -1,0 +1,42 @@
+# HasilanX repo-coupled workflow & Quality Gates configuration
+# Loaded automatically by hasilanx-daemon for this repository.
+
+[defaults]
+# Default agent & execution mode for new sessions in this repo
+agent = "codex"
+execution_mode = "auto"
+
+[roles]
+# Multi-agent routing: Parallel Worktree Compare automatically pairs implementer <-> reviewer
+implementer = "codex"
+reviewer = "agy"
+
+[worktree]
+# Untracked local files copied into newly spawned Git worktrees
+copy_files = [".env", ".env.local"]
+setup = []
+
+[checks]
+# Automatically verify dirty worktrees after each agent turn completes
+run_after_turn = true
+only_when_dirty = true
+
+[[checks.commands]]
+name = "Build"
+command = "cargo build --workspace"
+timeout_secs = 240
+
+[[checks.commands]]
+name = "Test"
+command = "cargo test --workspace --lib --bins"
+timeout_secs = 180
+
+[[commands]]
+name = "clippy"
+description = "Run cargo clippy across the workspace and fix all warnings"
+prompt = "Run `cargo clippy --workspace --all-targets` and fix every warning cleanly without suppressing useful lints."
+
+[[commands]]
+name = "review-pr"
+description = "Deep review of current git diff for bugs, GPUI perf, and IME safety"
+prompt = "Review the current uncommitted git diff for bugs, GPUI render-loop performance regressions, Wayland/Fcitx5 IME safety, and missing unit tests."

@@ -1,0 +1,10 @@
+[package]
+name = "hasilanx-git"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+hasilanx-protocol.workspace = true
+tempfile.workspace = true

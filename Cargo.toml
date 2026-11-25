@@ -1,0 +1,58 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/hasilanx-protocol",
+    "crates/hasilanx-store",
+    "crates/hasilanx-git",
+    "crates/hasilanx-pty",
+    "crates/hasilanx-adapters",
+    "crates/hasilanx-daemon",
+    "crates/hasilanx-desktop",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+
+[workspace.dependencies]
+hasilanx-protocol = { path = "crates/hasilanx-protocol" }
+hasilanx-store = { path = "crates/hasilanx-store" }
+hasilanx-git = { path = "crates/hasilanx-git" }
+hasilanx-pty = { path = "crates/hasilanx-pty" }
+hasilanx-adapters = { path = "crates/hasilanx-adapters" }
+
+anyhow = "1.0"
+async-trait = "0.1"
+axum = { version = "0.8", features = ["ws", "json"] }
+base64 = "0.22"
+chrono = { version = "0.4", features = ["serde"] }
+clap = { version = "4.5", features = ["derive", "env"] }
+dirs = "6.0"
+futures-util = "0.3"
+gpui-kit = { version = "0.10.0", features = ["syntect"] }
+hex = "0.4"
+notify-rust = "4.19"
+portable-pty = "0.9"
+rand = "0.9"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+rusqlite = { version = "0.34", features = ["bundled"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+tempfile = "3.27"
+thiserror = "2.0"
+tokio = { version = "1.44", features = ["full"] }
+tokio-tungstenite = "0.26"
+toml = "0.8"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+uuid = { version = "1.16", features = ["v4", "serde"] }
+unicode-width = "0.2"
+vte = "0.15"
+
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 2
+
