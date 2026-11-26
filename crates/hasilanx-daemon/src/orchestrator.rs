@@ -1007,6 +1007,26 @@ impl Orchestrator {
         // Check if we are switching from another agent mid-thread (Cross-Agent Handoff!)
         let handoff_prefix = self.maybe_build_handoff_context(thread, &cwd).await?;
 
+        // Inform the AI agent of repository workflow rules (.hasilanx.toml) on turn 1 and on handoff
+        let workflow_prefix = if turn_index == 1 || handoff_prefix.is_some() {
+            let project_root = self
+                .store
+                .get_project(&thread.project_id)
+                .ok()
+                .flatten()
+                .map(|p| PathBuf::from(p.root_path));
+            match workflow::load_project_workflow_with_fallback(&cwd, project_root.as_deref()) {
+                Ok(Some(cfg)) => workflow::format_agent_workflow_context(&cfg, thread),
+                Ok(None) => None,
+                Err(err) => {
+                    warn!(thread_id = %thread.id, error = %err, "failed to load .hasilanx.toml for prompt context");
+                    None
+                }
+            }
+        } else {
+            None
+        };
+
         // Auto-title untitled threads from first prompt
         if thread.title == "New Thread" {
             let auto_title: String = prompt.chars().take(48).collect();
@@ -1047,7 +1067,12 @@ impl Orchestrator {
             },
         })?;
 
-        let effective_prompt = build_effective_prompt(handoff_prefix.as_deref(), &prompt, &attachments);
+        let effective_prompt = build_effective_prompt(
+            workflow_prefix.as_deref(),
+            handoff_prefix.as_deref(),
+            &prompt,
+            &attachments,
+        );
 
         // Spawn session startup & prompt submission asynchronously so the UI transitions to Running in 0ms
         let orch_bg = Arc::clone(self);
@@ -1671,11 +1696,15 @@ impl Orchestrator {
 }
 
 fn build_effective_prompt(
+    workflow_prefix: Option<&str>,
     handoff_prefix: Option<&str>,
     prompt: &str,
     attachments: &[Attachment],
 ) -> String {
     let mut out = String::new();
+    if let Some(wf) = workflow_prefix {
+        out.push_str(wf);
+    }
     if let Some(prefix) = handoff_prefix {
         out.push_str(prefix);
     }
@@ -1688,6 +1717,32 @@ fn build_effective_prompt(
     }
     out.push_str(prompt);
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn builds_effective_prompt_with_workflow_handoff_and_attachments_in_order() {
+        let out = build_effective_prompt(
+            Some("[WF]\n\n"),
+            Some("[HANDOFF]\n\n"),
+            "Fix tests",
+            &[Attachment {
+                label: "src/lib.rs".into(),
+                path: "/repo/src/lib.rs".into(),
+            }],
+        );
+        let wf_pos = out.find("[WF]").unwrap();
+        let ho_pos = out.find("[HANDOFF]").unwrap();
+        let att_pos = out.find("[Attached files]").unwrap();
+        let prompt_pos = out.find("Fix tests").unwrap();
+        assert!(wf_pos < ho_pos && ho_pos < att_pos && att_pos < prompt_pos);
+
+        let plain = build_effective_prompt(None, None, "Hello", &[]);
+        assert_eq!(plain, "Hello");
+    }
 }
 
 fn expand_tilde(path: &str) -> String {

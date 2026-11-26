@@ -39,7 +39,7 @@ impl SettingsTab {
             Self::Appearance => "Theme, new session atmosphere, sidebar density, and terminal font.",
             Self::InputSession => "IME-safe send key, new session defaults, and keyboard shortcuts.",
             Self::Agents => "Discovered AI coding agents, live model catalogs, and default agent.",
-            Self::Workflow => "Repository-coupled .hasilanx.toml hooks, quality gates, and roles.",
+            Self::Workflow => "Repository .hasilanx.toml hooks, quality gates, roles (auto-shared with AI).",
             Self::Daemons => "Local daemon health and remote Tailscale / LAN workstations.",
         }
     }
@@ -1981,6 +1981,18 @@ impl HasilanxApp {
                                     .text_color(p.text_faint)
                                     .truncate()
                                     .child(".hasilanx.toml"),
+                            )
+                            .child(
+                                div()
+                                    .px_1p5()
+                                    .py(px(1.0))
+                                    .rounded_full()
+                                    .bg(p.accent_soft)
+                                    .text_xs()
+                                    .font_medium()
+                                    .text_color(p.accent)
+                                    .flex_shrink_0()
+                                    .child("AI synced"),
                             ),
                     )
                     .child(

@@ -1,6 +1,7 @@
 use anyhow::{Context, Result};
 use hasilanx_protocol::{
-    CheckCommandSpec, CheckResultRecord, CheckRunStatus, ProjectWorkflowConfig, now_ms,
+    CheckCommandSpec, CheckResultRecord, CheckRunStatus, ProjectWorkflowConfig, ThreadRecord,
+    WorkspaceMode, now_ms,
 };
 use std::path::{Component, Path, PathBuf};
 use std::process::Stdio;
@@ -20,6 +21,143 @@ pub fn load_project_workflow(root: &Path) -> Result<Option<ProjectWorkflowConfig
     let cfg: ProjectWorkflowConfig =
         toml::from_str(&raw).with_context(|| format!("invalid TOML in {}", path.display()))?;
     Ok(Some(cfg))
+}
+
+/// Loads `.hasilanx.toml` from `cwd` (e.g. an active worktree) first, falling back to
+/// `project_root` so untracked local `.hasilanx.toml` files still apply inside worktrees.
+pub fn load_project_workflow_with_fallback(
+    cwd: &Path,
+    project_root: Option<&Path>,
+) -> Result<Option<ProjectWorkflowConfig>> {
+    if let Some(cfg) = load_project_workflow(cwd)? {
+        return Ok(Some(cfg));
+    }
+    if let Some(root) = project_root {
+        if root != cwd {
+            return load_project_workflow(root);
+        }
+    }
+    Ok(None)
+}
+
+/// Formats a concise, high-signal workflow summary from `.hasilanx.toml` to prepend
+/// to an AI agent's internal prompt on session start (turn 1) and cross-agent handoff.
+/// Returns `None` if `.hasilanx.toml` defines no actionable roles, checks, or worktree hooks.
+pub fn format_agent_workflow_context(
+    cfg: &ProjectWorkflowConfig,
+    thread: &ThreadRecord,
+) -> Option<String> {
+    let has_roles = cfg.roles.implementer.is_some() || cfg.roles.reviewer.is_some();
+    let has_checks = !cfg.checks.commands.is_empty();
+    let has_wt_hooks = thread.workspace_mode == WorkspaceMode::Worktree
+        && (!cfg.worktree.copy_files.is_empty() || !cfg.worktree.setup.is_empty());
+
+    if !has_roles && !has_checks && !has_wt_hooks {
+        return None;
+    }
+
+    let mut out = String::from("[HasilanX Repository Workflow (.hasilanx.toml)]\n");
+
+    let ws_label = match thread.workspace_mode {
+        WorkspaceMode::Worktree => "Isolated Git Worktree",
+        WorkspaceMode::Local => "Local checkout",
+    };
+    if let Some(br) = thread.branch_name.as_deref().filter(|b| !b.trim().is_empty()) {
+        out.push_str(&format!("- Workspace: {ws_label} (branch `{br}`)\n"));
+    } else {
+        out.push_str(&format!("- Workspace: {ws_label}\n"));
+    }
+
+    if has_roles {
+        let active = thread.active_agent_id.as_str();
+        let imp = cfg.roles.implementer.as_deref();
+        let rev = cfg.roles.reviewer.as_deref();
+        match (imp == Some(active), rev == Some(active)) {
+            (true, true) => {
+                out.push_str(&format!(
+                    "- Your Role: Implementer & Reviewer (active agent: `{active}`)\n"
+                ));
+            }
+            (true, false) => {
+                if let Some(r) = rev {
+                    out.push_str(&format!(
+                        "- Your Role: Implementer (active agent: `{active}`; paired Reviewer: `{r}`)\n"
+                    ));
+                } else {
+                    out.push_str(&format!(
+                        "- Your Role: Implementer (active agent: `{active}`)\n"
+                    ));
+                }
+            }
+            (false, true) => {
+                if let Some(i) = imp {
+                    out.push_str(&format!(
+                        "- Your Role: Reviewer (active agent: `{active}`; paired Implementer: `{i}`)\n"
+                    ));
+                } else {
+                    out.push_str(&format!(
+                        "- Your Role: Reviewer (active agent: `{active}`)\n"
+                    ));
+                }
+            }
+            (false, false) => {
+                let mut parts = Vec::new();
+                if let Some(i) = imp {
+                    parts.push(format!("implementer=`{i}`"));
+                }
+                if let Some(r) = rev {
+                    parts.push(format!("reviewer=`{r}`"));
+                }
+                out.push_str(&format!(
+                    "- Configured Roles: {} (active agent: `{active}`)\n",
+                    parts.join(", ")
+                ));
+            }
+        }
+    }
+
+    if has_checks {
+        let cadence = if cfg.checks.run_after_turn {
+            if cfg.checks.only_when_dirty {
+                "auto-verified by HasilanX after turns with uncommitted changes"
+            } else {
+                "auto-verified by HasilanX after every turn"
+            }
+        } else {
+            "configured in .hasilanx.toml (runnable via /check)"
+        };
+        out.push_str(&format!("- Quality Gates ({cadence}):\n"));
+        for spec in &cfg.checks.commands {
+            let cmd_one = spec
+                .command
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ");
+            out.push_str(&format!("  - {}: `{cmd_one}`\n", spec.name));
+        }
+    }
+
+    if has_wt_hooks {
+        let mut wt_parts = Vec::new();
+        if !cfg.worktree.copy_files.is_empty() {
+            wt_parts.push(format!(
+                "copy_files=[{}]",
+                cfg.worktree.copy_files.join(", ")
+            ));
+        }
+        if !cfg.worktree.setup.is_empty() {
+            wt_parts.push(format!("setup=[{}]", cfg.worktree.setup.join(" && ")));
+        }
+        out.push_str(&format!("- Worktree Hooks: {}\n", wt_parts.join(" | ")));
+    }
+
+    if has_checks {
+        out.push_str(
+            "Keep your changes compatible with the quality gates above before finishing your turn.\n",
+        );
+    }
+    out.push_str("[End Repository Workflow]\n\n");
+    Some(out)
 }
 
 pub fn init_project_workflow(root: &Path) -> Result<(PathBuf, ProjectWorkflowConfig)> {
@@ -563,5 +701,101 @@ timeout_secs = 30
         assert_eq!(parsed.defaults.workspace_mode, Some(WorkspaceMode::Worktree));
         assert_eq!(parsed.checks.commands[0].command, "echo hi");
         assert_eq!(parsed.checks.commands[0].timeout_secs, Some(30));
+    }
+
+    #[test]
+    fn formats_workflow_context_for_ai_and_skips_empty_configs() {
+        use hasilanx_protocol::ThreadStatus;
+
+        let make_thread = |agent: &str, mode: WorkspaceMode, branch: Option<&str>| ThreadRecord {
+            id: "th-1".into(),
+            project_id: "proj-1".into(),
+            title: "Test".into(),
+            workspace_mode: mode,
+            worktree_path: None,
+            branch_name: branch.map(str::to_string),
+            active_agent_id: agent.into(),
+            active_model: None,
+            active_thinking: None,
+            execution_mode: ExecutionMode::Auto,
+            status: ThreadStatus::Idle,
+            last_error: None,
+            created_at: 0,
+            updated_at: 0,
+        };
+
+        // Empty config should produce None (zero token overhead)
+        let empty = ProjectWorkflowConfig::default();
+        assert!(format_agent_workflow_context(&empty, &make_thread("codex", WorkspaceMode::Local, Some("main"))).is_none());
+
+        let cfg: ProjectWorkflowConfig = toml::from_str(
+            r#"
+[roles]
+implementer = "codex"
+reviewer = "agy"
+
+[worktree]
+copy_files = [".env"]
+setup = ["cargo fetch"]
+
+[checks]
+run_after_turn = true
+only_when_dirty = true
+
+[[checks.commands]]
+name = "Build"
+command = "cargo build --workspace"
+"#,
+        )
+        .unwrap();
+
+        let imp_ctx = format_agent_workflow_context(
+            &cfg,
+            &make_thread("codex", WorkspaceMode::Local, Some("main")),
+        )
+        .expect("implementer context");
+        assert!(imp_ctx.contains("Local checkout (branch `main`)"));
+        assert!(imp_ctx.contains("Your Role: Implementer (active agent: `codex`; paired Reviewer: `agy`)"));
+        assert!(imp_ctx.contains("Build: `cargo build --workspace`"));
+        assert!(imp_ctx.contains("auto-verified by HasilanX after turns with uncommitted changes"));
+        // Worktree hooks are omitted on Local checkout
+        assert!(!imp_ctx.contains("Worktree Hooks"));
+
+        let rev_ctx = format_agent_workflow_context(
+            &cfg,
+            &make_thread("agy", WorkspaceMode::Worktree, Some("hx/review")),
+        )
+        .expect("reviewer context");
+        assert!(rev_ctx.contains("Isolated Git Worktree (branch `hx/review`)"));
+        assert!(rev_ctx.contains("Your Role: Reviewer (active agent: `agy`; paired Implementer: `codex`)"));
+        assert!(rev_ctx.contains("Worktree Hooks: copy_files=[.env] | setup=[cargo fetch]"));
+    }
+
+    #[test]
+    fn loads_workflow_with_worktree_fallback_to_project_root() {
+        let root = tempfile::tempdir().unwrap();
+        let wt = tempfile::tempdir().unwrap();
+        std::fs::write(
+            root.path().join(WORKFLOW_FILENAME),
+            "[roles]\nimplementer = \"codex\"\n",
+        )
+        .unwrap();
+
+        // Untracked .hasilanx.toml only in project root -> fallback succeeds
+        let from_fallback = load_project_workflow_with_fallback(wt.path(), Some(root.path()))
+            .unwrap()
+            .expect("fallback config");
+        assert_eq!(from_fallback.roles.implementer.as_deref(), Some("codex"));
+
+        // Worktree-specific .hasilanx.toml overrides project root
+        std::fs::write(
+            wt.path().join(WORKFLOW_FILENAME),
+            "[roles]\nimplementer = \"agy\"\n",
+        )
+        .unwrap();
+        let from_wt = load_project_workflow_with_fallback(wt.path(), Some(root.path()))
+            .unwrap()
+            .expect("worktree config");
+        assert_eq!(from_wt.roles.implementer.as_deref(), Some("agy"));
     }
 }

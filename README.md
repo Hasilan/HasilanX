@@ -86,6 +86,8 @@ description = "Run cargo clippy across the workspace and fix all warnings"
 prompt = "Run `cargo clippy --workspace --all-targets` and fix every warning cleanly."
 ```
 
+When a session starts (turn 1) or hands off to another agent mid-thread, HasilanX automatically injects a concise `.hasilanx.toml` workflow summary (workspace mode, assigned agent role, Quality Gates, and worktree hooks) into the AI's internal prompt — keeping the visible chat clean while ensuring every agent knows your repository's verification gates upfront.
+
 When a post-turn check fails, HasilanX highlights the status in the top bar, automatically expands the inline **Quality Gates** drawer with the failure output, and provides a 1-click **`Auto-Fix`** button to send the exact failure log back to the active agent.
 
 ---
@@ -94,10 +96,10 @@ When a post-turn check fails, HasilanX highlights the status in the top bar, aut
 
 ### Option 1: Prebuilt Release Binaries (Linux x86_64)
 
-Download `hasilanx-v0.1.0-x86_64-unknown-linux-gnu.tar.gz` from [GitHub Releases](https://github.com/Hasilan/HasilanX/releases), extract, and run:
+Download `hasilanx-v0.1.1-x86_64-unknown-linux-gnu.tar.gz` from [GitHub Releases](https://github.com/Hasilan/HasilanX/releases), extract, and run:
 
 ```bash
-tar -xzf hasilanx-v0.1.0-x86_64-unknown-linux-gnu.tar.gz
+tar -xzf hasilanx-v0.1.1-x86_64-unknown-linux-gnu.tar.gz
 ./hasilanx
 ```
 
